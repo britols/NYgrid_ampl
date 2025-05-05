@@ -1,0 +1,51 @@
+reset;
+
+model transport.mod;
+data transport.dat;
+data wind_availability.dat;
+data solar_availability.dat;
+data original_demand.dat;
+
+option solver Gurobi;
+
+solve;
+
+
+param power_flow_in{t in TIME_PERIODS,n in ZONES};
+param power_flow_out{t in TIME_PERIODS,n in ZONES};
+param Curtailment{TIME_PERIODS,ZONES};
+
+
+let { t in TIME_PERIODS,n in ZONES} power_flow_out[t,n] := 
+    sum{l in LINES: line_from[l] == n} flow[l,t];
+    
+let {t in TIME_PERIODS,n in ZONES} power_flow_in[t,n] := 
+    sum{l in LINES: line_to[l] == n} flow[l,t];
+
+let {t in TIME_PERIODS,n in ZONES} Curtailment[t,n] := wind_avail[t,n] * capacity_installed_gen['WIND',n] - Prod_generator['WIND',t,n]
++ solar_avail[t,n] * capacity_installed_gen['SOLAR',n] - Prod_generator['SOLAR',t,n]
++ capacity_installed_gen['HYDRO',n] - Prod_generator['HYDRO',t,n];
+  
+
+#Build an output file like this: TIME,ZONE, VARIABLE, VALUE
+# VARIABLE IS ONE OF [G in GENERATORS, Charge in STORAGE, Discharge in STORAGE, Demand in fixed_demand, Power_in, Power_out, Load_shedding, Curtailment
+
+printf ",%s,%s,%s,%s\n", "time","zone","variable","value" > simulation_output.csv;
+for {t in TIME_PERIODS} {
+	for {n in ZONES} {
+		for{g in GENERATORS} {
+    		printf ",%d,%s,%s,%f\n", t,n,g,Prod_generator[g,t,n] >> simulation_output.csv;
+    	}
+    	for{b in STORAGE} {
+    		printf ",%d,%s,%s,%f\n", t,n,'charge',Charge[b,t,n] >> simulation_output.csv;
+    		printf ",%d,%s,%s,%f\n", t,n,'discharge',Discharge[b,t,n] >> simulation_output.csv;
+    	}
+    	printf ",%d,%s,%s,%f\n", t,n,'demand',fixed_demand[t,n] >> simulation_output.csv;
+    	printf ",%d,%s,%s,%f\n", t,n,'power_flow_in',power_flow_in[t,n] >> simulation_output.csv;
+    	printf ",%d,%s,%s,%f\n", t,n,'power_flow_out',power_flow_out[t,n] >> simulation_output.csv;
+    	printf ",%d,%s,%s,%f\n", t,n,'Load_shed',Load_shed[t,n] >> simulation_output.csv;
+    	printf ",%d,%s,%s,%f\n", t,n,'curtailment',Curtailment[t,n] >> simulation_output.csv;
+    
+    	
+    }
+}

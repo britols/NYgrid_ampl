@@ -1,0 +1,226 @@
+reset;
+
+model DCOPF.mod;
+data DCOPF.dat;
+
+
+option solver Gurobi;
+
+
+solve;
+
+param max_theta{ZONES};
+let {n in ZONES} max_theta[n] := max{t in TIME_PERIODS} theta[t,n];
+param min_theta{ZONES};
+let {n in ZONES} min_theta[n] := min{t in TIME_PERIODS} theta[t,n];
+
+display min_theta, max_theta;
+
+
+
+param max_flow{LINES};
+let {l in LINES} max_flow[l] := max{t in TIME_PERIODS} flow[l,t];
+
+param min_flow{LINES};
+let {l in LINES} min_flow[l] := min{t in TIME_PERIODS} flow[l,t];
+
+display min_flow, max_flow;
+
+param load_shed{n in ZONES};
+let {n in ZONES} load_shed[n] := sum{t in TIME_PERIODS}  Load_shed[t,n];
+	
+param total_curtailment{n in ZONES};
+let {n in ZONES} total_curtailment[n] := sum{g in GENERATORS,t in TIME_PERIODS}  Curtailment[g,t,n];
+  
+
+param total_demand;
+let total_demand := sum{t in TIME_PERIODS,n in ZONES} fixed_demand[t,n];
+
+display total_cost;
+display total_cost/total_demand;
+display capacity_installed_stor;
+display capacity_installed_gen;
+display load_shed;
+
+
+
+# Post-Processing Analysis for Identifying Transmission Bottlenecks
+
+# 1. Add shadow price reporting to your DCOPF model
+# Add these to your AMPL model file:
+
+# For line capacity constraints (positive direction)
+param shadow_price_pos{l in LINES, t in TIME_PERIODS};
+let {l in LINES, t in TIME_PERIODS} shadow_price_pos[l,t] := LineCapacityPos[l,t].dual;
+
+# For line capacity constraints (negative direction)
+param shadow_price_neg{l in LINES, t in TIME_PERIODS};
+let {l in LINES, t in TIME_PERIODS} shadow_price_neg[l,t] := LineCapacityNeg[l,t].dual;
+
+# Calculate total congestion hours per line
+param congestion_hours{l in LINES};
+let {l in LINES} congestion_hours[l] := sum{t in TIME_PERIODS} 
+    if (shadow_price_pos[l,t] > 0.001 || shadow_price_neg[l,t] > 0.001) then 1 else 0;
+
+# Calculate congestion cost per line
+param congestion_cost{l in LINES};
+let {l in LINES} congestion_cost[l] := sum{t in TIME_PERIODS} 
+    (shadow_price_pos[l,t] + shadow_price_neg[l,t]) * line_capacity[l];
+
+# 2. Calculate line utilization metrics
+param max_utilization{l in LINES};
+let {l in LINES} max_utilization[l] := max{t in TIME_PERIODS} abs(flow[l,t]) / line_capacity[l];
+
+param avg_utilization{l in LINES};
+let {l in LINES} avg_utilization[l] := (sum{t in TIME_PERIODS} abs(flow[l,t])) / 
+    (card(TIME_PERIODS) * line_capacity[l]);
+
+# 3. Calculate Price Difference Across Lines
+param price_diff{l in LINES, t in TIME_PERIODS};
+let {l in LINES, t in TIME_PERIODS} price_diff[l,t] := 
+    abs(NodeBalance[t,line_from[l]].dual - NodeBalance[t,line_to[l]].dual);
+
+param avg_price_diff{l in LINES};
+let {l in LINES} avg_price_diff[l] := (sum{t in TIME_PERIODS} price_diff[l,t]) / card(TIME_PERIODS);
+
+# 4. Display bottleneck analysis
+printf "=== TRANSMISSION BOTTLENECK ANALYSIS ===\n\n";
+printf "Line\tCong. Hours\tCong. Cost\tMax Util.\tAvg Util.\tAvg Price Diff.\n";
+printf {l in LINES} "%s\t%d\t%.2f\t%.2f%%\t%.2f%%\t%.2f\n", 
+    l, congestion_hours[l], congestion_cost[l], 
+    max_utilization[l]*100, avg_utilization[l]*100, avg_price_diff[l];
+
+# 5. Calculate Flow Direction Frequency
+param flow_pos_freq{l in LINES};
+let {l in LINES} flow_pos_freq[l] := (sum{t in TIME_PERIODS} if flow[l,t] > 0 then 1 else 0) / 
+    card(TIME_PERIODS);
+
+param flow_neg_freq{l in LINES};
+let {l in LINES} flow_neg_freq[l] := (sum{t in TIME_PERIODS} if flow[l,t] < 0 then 1 else 0) / 
+    card(TIME_PERIODS);
+
+# 6. Find Most Congested Hours
+param top_congested_hours{1..5};
+let {i in 1..5} top_congested_hours[i] := 0;
+
+param total_congestion{t in TIME_PERIODS};
+let {t in TIME_PERIODS} total_congestion[t] := sum{l in LINES} 
+    if (shadow_price_pos[l,t] > 0.001 || shadow_price_neg[l,t] > 0.001) then 1 else 0;
+
+# IMPORTANT: This part would be implemented in a more sophisticated way in practice,
+# as AMPL doesn't have a direct "top-N" sorting capability in the modeling language.
+# In practice, you would export the data and process it in a script.
+
+# 7. Export detailed results for further analysis
+# Display commands to help create output files for further analysis in Python/R
+printf "\nTo export detailed congestion data for further analysis:\n";
+printf "1. Run: display {l in LINES, t in TIME_PERIODS: shadow_price_pos[l,t] > 0.001 || shadow_price_neg[l,t] > 0.001} (l,t,flow[l,t],line_capacity[l]) > congestion_details.txt\n";
+printf "2. Run: display {l in LINES} (l,congestion_hours[l],congestion_cost[l],max_utilization[l]) > bottleneck_summary.txt\n";
+
+############################
+
+###########################
+
+reset;
+
+model transport.mod;
+data transport.dat;
+
+
+option solver Gurobi;
+
+
+solve;
+
+param max_flow{LINES};
+let {l in LINES} max_flow[l] := max{t in TIME_PERIODS} flow[l,t];
+
+param min_flow{LINES};
+let {l in LINES} min_flow[l] := min{t in TIME_PERIODS} flow[l,t];
+
+display min_flow, max_flow;
+
+
+param load_shed{n in ZONES};
+let {n in ZONES} load_shed[n] := sum{t in TIME_PERIODS}  Curtailment[t,n];
+	  
+
+param total_demand;
+let total_demand := sum{t in TIME_PERIODS,n in ZONES} fixed_demand[t,n];
+
+display total_cost;
+display total_cost/total_demand;
+display capacity_installed_stor;
+display capacity_installed_ger;
+display load_shed;
+
+
+
+param power_flow_time{n in ZONES, t in TIME_PERIODS};
+let {n in ZONES, t in TIME_PERIODS} power_flow_time[n,t] := 
+    sum{l in LINES} line_incidence[l,n] * flow[l,t];
+    
+    
+
+param load_shed_time{n in ZONES, t in TIME_PERIODS};
+let {n in ZONES, t in TIME_PERIODS} load_shed_time[n,t] := Curtailment[t,n];
+
+
+for {n in ZONES} {
+    printf ",%s", n >> power_flows_transport.csv;
+}
+printf "\n" >> power_flows_transport.csv;
+
+# Write data for each time period
+for {t in TIME_PERIODS} {
+    printf "%d", t >> power_flow_transports.csv;
+    for {n in ZONES} {
+        printf ",%f", power_flow_time[n,t] >> power_flows_transport.csv;
+    }
+    printf "\n" >> power_flows_transport.csv;
+}
+
+
+for {n in ZONES} {
+    printf ",%s", n >> load_shed_transport.csv;
+}
+printf "\n" >> load_shed_transport.csv;
+
+# Write data for each time period
+for {t in TIME_PERIODS} {
+    printf "%d", t >> load_shed_transport.csv;
+    for {n in ZONES} {
+        printf ",%f", Curtailment[t,n] >> load_shed_transport.csv;
+    }
+    printf "\n" >> load_shed_transport.csv;
+}
+
+
+for {n in ZONES} {
+    printf ",%s", n >> power_transport.csv;
+}
+printf "\n" >> power_transport.csv;
+
+# Write data for each time period
+for {t in TIME_PERIODS} {
+    printf "%d", t >> power_transport.csv;
+    for {n in ZONES} {
+        printf ",%f", sum{g in GENERATORS} Prod_generator[g,t,n] >> power_transport.csv;
+    }
+    printf "\n" >> power_transport.csv;
+}
+
+
+for {n in ZONES} {
+    printf ",%s", n >> discharge_transport.csv;
+}
+printf "\n" >> discharge_transport.csv;
+
+# Write data for each time period
+for {t in TIME_PERIODS} {
+    printf "%d", t >> discharge_transport.csv;
+    for {n in ZONES} {
+        printf ",%f", sum{b in STORAGE} Discharge[b,t,n] >> discharge_transport.csv;
+    }
+    printf "\n" >> discharge_transport.csv;
+}

@@ -1,0 +1,169 @@
+reset;
+
+model _model.mod;
+data _data.dat;
+data wind_availability.dat;
+data solar_availability.dat;
+
+#data original_demand.dat;
+data total_demand_2036.dat
+
+option solver Gurobi;
+
+
+#param output_filename_generator symbolic;
+#param output_filename_zone symbolic;
+param output_filename symbolic;
+
+let output_filename := "simulations_output/future_demand_by_generator_2050.csv";
+
+#let output_filename_generator := "output_original_demand_by_generator.csv";
+#let output_filename_generator := "output_future_summer_peaking_by_generator.csv";
+#let output_filename_generator := "output_future_winter_peaking_by_generator.csv";
+#let output_filename_generator := "output_future_winter_peaking_by_generator_fix_storage.csv";
+
+
+#let output_filename_zone := "output_original_demand_by_zone.csv";
+#let output_filename_zone := "output_future_summer_peaking_by_zone.csv";
+#let output_filename_zone := "output_future_winter_peaking_by_zone.csv";
+#let output_filename_zone := "output_future_winter_peaking_by_zone_fix_storage.csv";
+
+
+
+
+#param has_nuclear;
+#let has_nuclear := 0;
+
+#=====================================
+# 01. Changes in the installed capacity
+#=====================================
+#
+#--------------------------
+# No offshore
+#--------------------------
+#let new_capacity_installed_gen['WIND','J'] := 0;
+#let new_capacity_installed_gen['WIND','K'] := 0;
+
+#fix new_capacity_installed_gen['WIND','J'];
+#fix new_capacity_installed_gen['WIND','K'];
+#--------------------------
+# No nuclear
+#--------------------------
+#let {n in ZONES,g in GENERATORS: g = "NUCLEAR"} existing_installed_capacity_gen[g,n] := has_nuclear * existing_installed_capacity_gen[g,n];
+#--------------------------
+# Can't expand storage
+#--------------------------
+
+
+
+#let {b in STORAGE,n in ZONES} new_capacity_installed_stor[b,n] := 0;
+#fix new_capacity_installed_stor;
+
+#=====================================
+# 02. Solve the model
+#=====================================
+solve;
+
+
+#=====================================
+# 03. Create parameters to store model results
+#=====================================
+param power_flow_in{t in TIME_PERIODS,n in ZONES};
+param power_flow_out{t in TIME_PERIODS,n in ZONES};
+param Curtailment{TIME_PERIODS,GENERATORS,ZONES}, default 0;  
+param imports_total{t in TIME_PERIODS,n in ZONES};
+
+
+let {t in TIME_PERIODS,n in ZONES} imports_total[t,n] :=
+	sum{w in ISOS} imports[n,t,w]
+;
+
+let { t in TIME_PERIODS,n in ZONES} power_flow_out[t,n] := 
+    sum{l in LINES: line_from[l] == n} flow[l,t];
+    
+let {t in TIME_PERIODS,n in ZONES} power_flow_in[t,n] := 
+    sum{l in LINES: line_to[l] == n} flow[l,t];
+
+
+let {t in TIME_PERIODS,n in ZONES} 
+Curtailment[t,'WIND',n] := 
+wind_avail[t,n] * (new_capacity_installed_gen['WIND',n] 
++ existing_installed_capacity_gen['WIND',n]) 
+- Prod_generator['WIND',t,n]
+;
+
+let {t in TIME_PERIODS,n in ZONES} 
+Curtailment[t,'SOLAR',n] := 
+solar_avail[t,n] * (new_capacity_installed_gen['SOLAR',n] 
++ existing_installed_capacity_gen['SOLAR',n])  
+- Prod_generator['SOLAR',t,n]
+;
+
+let {t in TIME_PERIODS,n in ZONES} 
+Curtailment[t,'HYDRO',n] :=
+existing_installed_capacity_gen['HYDRO',n]
+ - Prod_generator['HYDRO',t,n]
+ ;
+
+
+#=====================================
+# 02. Export data by generator and zone
+#=====================================
+
+printf ",%s,%s,%s,%s,%s\n", "time","generator","zone","variable","value" > (output_filename);
+for {n in ZONES} {
+	for{g in GENERATORS} {
+		printf ",%s,%s,%s,%s,%f\n","1",g,n,'existing_capacity',existing_installed_capacity_gen[g,n] >> (output_filename);	
+		printf ",%s,%s,%s,%s,%f\n","1",g,n,'new_capacity',new_capacity_installed_gen[g,n] >> (output_filename);
+		printf ",%s,%s,%s,%s,%f\n","1",g,n,'retired_capacity',retired_capacity_gen[g,n] >> (output_filename);
+	}
+	for{b in STORAGE} {
+		printf ",%s,%s,%s,%s,%f\n","1",b,n,'existing_capacity',existing_installed_capacity_stor[b,n] >> (output_filename);	
+		printf ",%s,%s,%s,%s,%f\n","1",b,n,'new_capacity',new_capacity_installed_stor[b,n] >> (output_filename);	
+	}
+};
+
+for {t in TIME_PERIODS} {
+	for {n in ZONES} {
+		for{g in GENERATORS} {
+		    printf ",%d,%s,%s,%s,%f\n", t,g,n,"Production",Prod_generator[g,t,n] >> (output_filename);
+			printf ",%d,%s,%s,%s,%f\n",t,g,n,'Curtailment',Curtailment[t,g,n] >> (output_filename);
+			}
+		for{b in STORAGE} {
+    		printf ",%d,%s,%s,%s,%f\n", t,b,n,'Charge',Charge[b,t,n] >> (output_filename);
+    		printf ",%d,%s,%s,%s,%f\n", t,b,n,'Production',Discharge[b,t,n] >> (output_filename);
+    	}
+    	
+    	printf ",%d,%s,%s,%s,%f\n", t,'demand',n,'demand',fixed_demand[t,n] >> (output_filename);
+    	printf ",%d,%s,%s,%s,%f\n", t,'power_flow_in',n,'power_flow_in',power_flow_in[t,n] >> (output_filename);
+    	printf ",%d,%s,%s,%s,%f\n", t,'power_flow_out',n,'power_flow_out',power_flow_out[t,n] >> (output_filename);
+    	printf ",%d,%s,%s,%s,%f\n", t,'Load_shed',n,'Load_shed',Load_shed[t,n] >> (output_filename);
+    	printf ",%d,%s,%s,%s,%f\n", t,'imports',n,'imports',imports_total[t,n] >> (output_filename); 
+    	
+	}
+	for{l in LINES}{
+	    printf ",%d,%s,%s,%s,%f\n", t,'Flow',l,'Flow',flow[l,t]/line_capacity[l] >> (output_filename); 
+	
+	}
+};
+
+
+
+
+#=====================================
+# 03. Export data by zone
+#=====================================	
+
+#printf ",%s,%s,%s,%s,%s\n", "time","generator","zone","variable","value" > (output_filename_zone);
+#for {t in TIME_PERIODS} {
+#	for {n in ZONES} {
+#    	printf ",%d,%s,%s,%s,%f\n", t,'demand',n,'demand',fixed_demand[t,n] >> (output_filename_zone);
+#    	printf ",%d,%s,%s,%s,%f\n", t,'power_flow_in',n,'power_flow_in',power_flow_in[t,n] >> (output_filename_zone);
+#    	printf ",%d,%s,%s,%s,%f\n", t,'power_flow_out',n,'power_flow_out',power_flow_out[t,n] >> (output_filename_zone);
+#    	printf ",%d,%s,%s,%s,%f\n", t,'Load_shed',n,'Load_shed',Load_shed[t,n] >> (output_filename_zone);
+#    	printf ",%d,%s,%s,%s,%f\n", t,'imports',n,'imports',imports_total[t,n] >> (output_filename_zone); 	
+#    }
+#}
+#;
+
+
